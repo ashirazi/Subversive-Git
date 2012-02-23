@@ -1,0 +1,92 @@
+#!/bin/sh
+
+# This script propagates changes made in git to subversion.
+#
+# Important!: We do not handle conflicts, and we should not see them, because:
+#   1. No one should commit directly to svn (updating is fine).
+#   2. We do not propagate changes made in subversion to git.
+
+# How to use:
+# 1) Use something like git-svn to clone your svn repo into a git repo
+# 1b) All your developers will clone from this repo
+#     (it becomes the remote origin)
+# 2) Make a fresh svn checkout of the project
+# 3) Copy the .git folder (step 1) into the svn checkout (step 2)
+# 4) Copy this script into the root of your git/svn hybrid repo (step 3)
+# 5) Running this script will take all changes pushed into this git repo, and
+#    commit them to the svn repo.
+
+# Handle filenames with spaces in them (only tabs & returns are separators)
+export IFS='	
+'
+
+# Go to the right branch, get the latest changes, and store the messages
+cd `dirname "$0"`
+git checkout master
+mkdir -p subversive-git-output
+git pull | tee -a subversive-git-output/last-git-pull.txt
+
+# Must svn up before you can commit
+echo "svn up"
+svn up
+
+# Remove files that should not be in the project
+git ls-files -zo --exclude-standard | xargs -r0 rm
+
+sleep 1
+
+# See what Subversion thinks has changed
+changes=`svn status 2> /dev/null`
+echo "subversion thinks these are your changes:\n$changes\n"
+
+conflicts=`echo "$changes" | grep -e '^ *C '`
+if [ -n "$conflicts" ]; then
+  echo "svn conflicts detected - merge manually" >&2
+  exit 1
+fi
+
+# Modified files will have the M or R status (fine as is)
+todos=`echo "$changes" | grep -ve '^[MR]'`
+
+# Deleted files will have ! status (delete them in svn)
+deletions=`echo "$todos" | grep -e '!' | sed -e 's/!  *//'`
+for file in $deletions
+do
+  if [ ! -d "$file" ]; then
+    echo "svn delete \"$file\""
+    svn delete "$file"
+  fi
+done
+
+sleep 1
+
+# Added files will have ? status (add them in svn)
+additions=`echo "$todos" | grep -e '?' | sed -e 's/?  *//'`
+for file in $additions
+do
+  echo "svn add \"$file\""
+  svn add "$file"
+done
+
+sleep 1
+
+# Now we will commit with the last message from git
+hex='[0-9a-fA-F]'
+range_pattern="${hex}${hex}${hex}*\.\.${hex}${hex}${hex}*"
+ranges=`grep -o "$range_pattern" subversive-git-output/last-git-pull.txt 2> /dev/null`
+for range in `echo "$ranges"`
+do
+  message=`git log "$range" 2> /dev/null`"
+${message}"
+done
+
+sleep 1
+
+# Wrap our message in a heredoc to avoid escapaing characters like " or '
+echo "svn commit"
+svn commit -m "`cat <<SVN_MSG
+${message}
+SVN_MSG`"
+
+# Cleanup after a successful svn commit
+rm subversive-git-output/last-git-pull.txt
