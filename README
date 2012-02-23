@@ -1,0 +1,7 @@
+Your team wants to use git, Management insists on subversion.
+
+Here is a one-way shell script that will take your pushes to a central git repo,
+and commit them to a svn repo.
+
+Important: Changes to subversion don't get committed to the git repo. So use
+this only if the entire dev team wants to use git!
